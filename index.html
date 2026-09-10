@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>倍々バウンド</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            background: #000;
+            cursor: pointer;
+        }
+        #shuffleBtn {
+            margin-top: 15px;
+            background: linear-gradient(45deg, #ff00de, #00ffff);
+            border: none;
+            color: white;
+            padding: 10px 24px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+            transition: 0.2s;
+            letter-spacing: 1px;
+        }
+        #shuffleBtn:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 0 25px rgba(255, 0, 222, 0.8);
+        }
+        #shuffleBtn:disabled {
+            background: #333;
+            color: #777;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    <button id="shuffleBtn" onclick="triggerShuffle()">枠シャッフル (30秒)</button>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const shuffleBtn = document.getElementById('shuffleBtn');
+
+        const defaultCenterX = canvas.width / 2;
+        const defaultCenterY = canvas.height / 2;
+        const containerRadius = 240;
+
+        let centerX = defaultCenterX;
+        let centerY = defaultCenterY;
+        
+        let targetCenterX = defaultCenterX;
+        let targetCenterY = defaultCenterY;
+
+        let shakeFrames = 0;
+        let shakeIntensity = 0;
+
+        let balls = [];
+        let isGameOver = false;
+        let gameOverFrames = 0;
+
+        let canShuffle = true;
+        let shuffleCooldownTimer = null;
+
+        // さらに上限を5倍（10000個）に引き上げ、ボールサイズをさらにコンパクト化（半径3px）
+        const FIXED_RADIUS = 3;
+        const MAX_BALLS = 10000;
+
+        class Ball {
+            constructor(x, y, vx, vy, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.radius = FIXED_RADIUS;
+                this.color = color;
+                this.mass = FIXED_RADIUS * FIXED_RADIUS;
+                this.cooldown = 0;
+            }
+
+            update() {
+                if (this.cooldown > 0) this.cooldown--;
+
+                const fromCenterX = this.x - centerX;
+                const fromCenterY = this.y - centerY;
+                const distToCenter = Math.hypot(fromCenterX, fromCenterY);
+                
+                if (distToCenter > 0.1) {
+                    const gravityStrength = 0.003;
+                    this.vx += (fromCenterX / distToCenter) * gravityStrength;
+                    this.vy += (fromCenterY / distToCenter) * gravityStrength;
+                } else {
+                    this.vx += (Math.random() - 0.5) * 0.1;
+                    this.vy += (Math.random() - 0.5) * 0.1;
+                }
+
+                this.vx += (Math.random() - 0.5) * 0.01;
+                this.vy += (Math.random() - 0.5) * 0.01;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                const dx = this.x - centerX;
+                const dy = this.y - centerY;
+                const distFromCenter = Math.hypot(dx, dy);
+
+                if (distFromCenter + this.radius > containerRadius) {
+                    const angle = Math.atan2(dy, dx);
+                    this.x = centerX + (containerRadius - this.radius) * Math.cos(angle);
+                    this.y = centerY + (containerRadius - this.radius) * Math.sin(angle);
+
+                    const nx = Math.cos(angle);
+                    const ny = Math.sin(angle);
+                    const dot = this.vx * nx + this.vy * ny;
+                    
+                    const restitution = 1.02;
+                    this.vx = (this.vx - 2 * dot * nx) * restitution;
+                    this.vy = (this.vy - 2 * dot * ny) * restitution;
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 6;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.closePath();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function init() {
+            balls = [];
+            isGameOver = false;
+            gameOverFrames = 0;
+            centerX = defaultCenterX;
+            centerY = defaultCenterY;
+            targetCenterX = defaultCenterX;
+            targetCenterY = defaultCenterY;
+            shakeFrames = 0;
+            shakeIntensity = 0;
+
+            canShuffle = true;
+            shuffleBtn.disabled = false;
+            shuffleBtn.innerText = "枠シャッフル";
+            if (shuffleCooldownTimer) clearInterval(shuffleCooldownTimer);
+
+            let x1 = centerX + (Math.random() - 0.5) * 100;
+            let y1 = centerY + (Math.random() - 0.5) * 100;
+            let x2, y2;
+            do {
+                x2 = centerX + (Math.random() - 0.5) * 100;
+                y2 = centerY + (Math.random() - 0.5) * 100;
+            } while (Math.hypot(x2 - x1, y2 - y1) < 80);
+
+            balls.push(new Ball(x1, y1, 2, 1, '#00ffff'));
+            balls.push(new Ball(x2, y2, -2, -1, '#ff00de'));
+        }
+
+        function resolveCollisions() {
+            if (isGameOver) return;
+            const newBalls = [];
+
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const b1 = balls[i];
+                    const b2 = balls[j];
+                    const dx = b2.x - b1.x;
+                    const dy = b2.y - b1.y;
+                    const dist = Math.hypot(dx, dy);
+                    const minDist = b1.radius + b2.radius;
+
+                    if (dist < minDist) {
+                        const overlap = minDist - dist;
+                        const angle = Math.atan2(dy, dx);
+                        const totalMass = b1.mass + b2.mass;
+
+                        b1.x -= overlap * (b2.mass / totalMass) * Math.cos(angle);
+                        b1.y -= overlap * (b2.mass / totalMass) * Math.sin(angle);
+                        b2.x += overlap * (b1.mass / totalMass) * Math.cos(angle);
+                        b2.y += overlap * (b1.mass / totalMass) * Math.sin(angle);
+
+                        const nx = Math.cos(angle);
+                        const ny = Math.sin(angle);
+                        const kx = b1.vx - b2.vx;
+                        const ky = b1.vy - b2.vy;
+                        const p = 2 * (nx * kx + ny * ky) / totalMass;
+
+                        b1.vx -= p * b2.mass * nx * 0.99;
+                        b1.vy -= p * b2.mass * ny * 0.99;
+                        b2.vx += p * b1.mass * nx * 0.99;
+                        b2.vy += p * b1.mass * ny * 0.99;
+
+                        if (balls.length >= MAX_BALLS && !isGameOver) {
+                            isGameOver = true;
+                            gameOverFrames = 60;
+                        }
+
+                        if (balls.length + newBalls.length < MAX_BALLS && b1.cooldown === 0 && b2.cooldown === 0) {
+                            b1.cooldown = 8;
+                            b2.cooldown = 8;
+
+                            const hue = Math.floor(Math.random() * 360);
+                            
+                            newBalls.push(new Ball(
+                                (b1.x + b2.x) / 2,
+                                (b1.y + b2.y) / 2,
+                                -b1.vx * 0.6 + (Math.random() - 0.5) * 3,
+                                -b1.vy * 0.6 + (Math.random() - 0.5) * 3,
+                                `hsl(${hue}, 100%, 60%)`
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if (newBalls.length > 0) {
+                balls.push(...newBalls);
+            }
+        }
+
+        function triggerShuffle() {
+            if (!canShuffle || isGameOver) return;
+
+            canShuffle = false;
+            shuffleBtn.disabled = true;
+
+            shakeFrames = 30;
+            shakeIntensity = 18;
+
+            targetCenterX = canvas.width / 2 + (Math.random() - 0.5) * 140;
+            targetCenterY = canvas.height / 2 + (Math.random() - 0.5) * 140;
+
+            for (let ball of balls) {
+                ball.vx += (Math.random() - 0.5) * 10;
+                ball.vy += (Math.random() - 0.5) * 10;
+            }
+
+            let timeLeft = 30;
+            shuffleBtn.innerText = `再シャッフル (${timeLeft}s)`;
+
+            shuffleCooldownTimer = setInterval(() => {
+                timeLeft--;
+                if (timeLeft > 0) {
+                    shuffleBtn.innerText = `再シャッフル (${timeLeft}s)`;
+                } else {
+                    clearInterval(shuffleCooldownTimer);
+                    canShuffle = true;
+                    shuffleBtn.disabled = false;
+                    shuffleBtn.innerText = "枠シャッフル";
+                }
+            }, 1000);
+        }
+
+        canvas.addEventListener('click', () => {
+            if (isGameOver) {
+                init();
+            }
+        });
+
+        function loop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            let offsetX = 0;
+            let offsetY = 0;
+            if (shakeFrames > 0) {
+                shakeFrames--;
+                offsetX = (Math.random() - 0.5) * shakeIntensity;
+                offsetY = (Math.random() - 0.5) * shakeIntensity;
+            }
+
+            centerX += (targetCenterX - centerX) * 0.08;
+            centerY += (targetCenterY - centerY) * 0.08;
+
+            if (isGameOver) {
+                gameOverFrames--;
+                ctx.beginPath();
+                ctx.arc(centerX + offsetX, centerY + offsetY, containerRadius + (60 - gameOverFrames) * 3, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 0, 60, ${gameOverFrames / 60})`;
+                ctx.lineWidth = 8;
+                ctx.stroke();
+                ctx.closePath();
+
+                if (gameOverFrames <= 0) {
+                    init();
+                }
+            } else {
+                const urgency = Math.min(balls.length / MAX_BALLS, 1);
+                const red = Math.floor(255 * urgency);
+                const blue = Math.floor(255 * (1 - urgency));
+                const strokeColor = `rgb(${red}, 100, ${blue})`;
+
+                ctx.beginPath();
+                ctx.arc(centerX + offsetX, centerY + offsetY, containerRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 4 + urgency * 4;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = strokeColor;
+                ctx.stroke();
+                ctx.closePath();
+                ctx.shadowBlur = 0;
+
+                resolveCollisions();
+                for (let ball of balls) {
+                    ball.update();
+                    ball.draw();
+                }
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        init();
+        loop();
+    </script>
+</body>
+</html>
